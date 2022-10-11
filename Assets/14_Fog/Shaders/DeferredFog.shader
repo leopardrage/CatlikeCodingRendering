@@ -87,7 +87,7 @@ Shader "Custom/Deferred Fog"
                 // defined in UnityShaderVariables. The Z component is the far plane's
                 // distance while the Y component is the near plane's distance.
                 // Since we are working in a converted space, this calculation won't
-                // produce exact results, but it's accetpable and that's also the way
+                // produce exact results, but it's acceptable and that's also the way
                 // the standard shader behaves.
                 float viewDistance = depth * _ProjectionParams.z - _ProjectionParams.y;
                 #if defined(FOG_DISTANCE)

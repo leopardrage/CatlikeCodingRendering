@@ -21,6 +21,11 @@ float _Cutoff;
 // patterns are stored in layers of a 3D texture.
 sampler3D _DitherMaskLOD;
 
+// These are needed to support tessellated shadows
+// (parallax data are used for vertex displacement)
+sampler2D _ParallaxMap;
+float _ParallaxStrength;
+
 #if defined(_RENDERING_FADE) || defined(_RENDERING_TRANSPARENT)
     // Since semitransparent shadows have strong visual limitations, only use
     // them if a specific _SEMITRANSPARENT_SHADOWS shader feature is set from
@@ -43,6 +48,23 @@ sampler3D _DitherMaskLOD;
     #endif
 #endif
 
+// Support for surface displacement
+// (same idea of the one in the *InputIncludedShared.cginc file).
+// Use Surface Displacement if a parallax map is provided and a specific keyword
+// has been defined
+#if defined(_PARALLAX_MAP) && defined(VERTEX_DISPLACEMENT_INSTEAD_OF_PARALLAX)
+    #undef _PARALLAX_MAP
+    #define VERTEX_DISPLACEMENT 1
+    // We are going to use parallax map and strength for surface displacement,
+    // but these macro aliases will make surface placement code agnostic about parallax.
+    #define _DisplacementMap _ParallaxMap
+    #define _DisplacementStrength _ParallaxStrength
+    // Specific snippet for shadows: define SHADOWS_NEED_UV if it wasn't already.
+    #if !defined(SHADOWS_NEED_UV)
+        #define SHADOWS_NEED_UV 1
+    #endif
+#endif
+
 struct VertexData {
     // This macro, defined in UnityInstancing (included by UnityCG),
     // declares an unsigned integer named instanceID with the SV_InstanceID,
@@ -50,7 +72,9 @@ struct VertexData {
     // instanceID contains the array index of the current instance
     // in the array of batched instances sent to the GPU.
     UNITY_VERTEX_INPUT_INSTANCE_ID
-    float4 position : POSITION;
+    // Renamed from 'position' to 'vertex' for compatibility with the tessellation shader.
+    float4 vertex : POSITION;
+    // float4 position : POSITION;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
 };
@@ -109,6 +133,12 @@ float GetAlpha(Interpolators i) {
     return alpha;
 }
 
+// Macro alias to avoid breaking subshaders that expect the vertex program
+// to be named 'MyVertexProgram' (the need is raised by the tessellation shader
+// that uses the vertex program in the domain program, and he expects it to be
+// named 'MyVertexProgram').
+#define MyVertexProgram MyShadowVertexProgram
+
 InterpolatorsVertex MyShadowVertexProgram (VertexData v) {
     InterpolatorsVertex i;
     // This macro is defined in UnityInstancing (included by UnityCG)
@@ -124,16 +154,29 @@ InterpolatorsVertex MyShadowVertexProgram (VertexData v) {
     // interpolators, if GPU instancing is enabled. Otherwise, it does nothing.
     UNITY_TRANSFER_INSTANCE_ID(v, i);
 
-    #if defined(SHADOWS_CUBE)
-        i.position = UnityObjectToClipPos(v.position);
-        i.lightVec = mul(unity_ObjectToWorld, v.position).xyz - _LightPositionRange.xyz;
-    #else
-        i.position = UnityClipSpaceShadowCasterPos(v.position.xyz, v.normal);
-        i.position = UnityApplyLinearShadowBias(i.position);
-    #endif
-
+    // UV transform must be done here because we need them transform before
+    // sampling the displacement map in case of tessellated shadows. This
+    // allow tiling values to be correctly applied.
     #if SHADOWS_NEED_UV
         i.uv = TRANSFORM_TEX(v.uv, _MainTex);
+    #endif
+
+    // If we are applying surface displacement
+    // (see the vertex program in the SurfaceDisplacementShared.cginc for
+    // a full description)
+    #if VERTEX_DISPLACEMENT
+        float displacement = tex2Dlod(_DisplacementMap, float4(i.uv.xy, 0, 0)).g;
+        displacement = (displacement - 0.5) * _DisplacementStrength;
+        v.normal = normalize(v.normal);
+        v.vertex.xyz += v.normal * displacement;
+    #endif
+
+    #if defined(SHADOWS_CUBE)
+        i.position = UnityObjectToClipPos(v.vertex);
+        i.lightVec = mul(unity_ObjectToWorld, v.vertex).xyz - _LightPositionRange.xyz;
+    #else
+        i.position = UnityClipSpaceShadowCasterPos(v.vertex.xyz, v.normal);
+        i.position = UnityApplyLinearShadowBias(i.position);
     #endif
 
     return i;
